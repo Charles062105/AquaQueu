@@ -1,0 +1,9 @@
+{
+  "name": "aquaqueue-emulator-tests",
+  "private": true,
+  "scripts": {
+    "emulator:seed": "node test/emulator/seed.mjs",
+    "test:emulator": "firebase emulators:exec --only auth,firestore --project demo-aquaqueue \"node test/emulator/seed.mjs && node --test test/emulator/integration.test.mjs\"",
+    "test:rules": "firebase emulators:exec --only auth,firestore --project demo-aquaqueue \"node --test test/firestore_rules_test.mjs\""
+  }
+}

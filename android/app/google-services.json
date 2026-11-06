@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "567327080511",
+    "project_id": "aquaqueue-af8d3",
+    "storage_bucket": "aquaqueue-af8d3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:567327080511:android:4710c773ea52907013388a",
+        "android_client_info": {
+          "package_name": "com.aquaqueue.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBMKkEcGpJww_0d7I1qAiDIQIQyLVecTFg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

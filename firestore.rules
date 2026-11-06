@@ -1,0 +1,373 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid))
+          .data.role == 'admin';
+    }
+
+    function deliveryFee() {
+      return 30;
+    }
+
+    function validCustomerProfile() {
+      return request.resource.data.keys().hasOnly([
+          'fullName', 'email', 'phoneNumber', 'address', 'role', 'createdAt'
+        ])
+        && request.resource.data.keys().hasAll([
+          'fullName', 'email', 'phoneNumber', 'address', 'role', 'createdAt'
+        ])
+        && request.resource.data.fullName is string
+        && request.resource.data.fullName.size() > 0
+        && request.resource.data.email is string
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.phoneNumber is string
+        && request.resource.data.phoneNumber.size() > 0
+        && request.resource.data.address is string
+        && request.resource.data.address.size() > 0
+        && request.resource.data.role == 'customer'
+        && request.resource.data.createdAt == request.time;
+    }
+
+    function validProductItem(item) {
+      return item is map
+        && item.keys().hasOnly([
+          'productId', 'productName', 'unitPrice', 'quantity', 'lineTotal'
+        ])
+        && item.keys().hasAll([
+          'productId', 'productName', 'unitPrice', 'quantity', 'lineTotal'
+        ])
+        && item.productId is string
+        && item.productName is string
+        && item.unitPrice is number
+        && item.quantity is int
+        && item.quantity > 0
+        && item.quantity <= 99
+        && item.lineTotal is number
+        && item.lineTotal == item.unitPrice * item.quantity
+        && exists(/databases/$(database)/documents/products/$(item.productId))
+        && get(/databases/$(database)/documents/products/$(item.productId))
+          .data.available == true
+        && get(/databases/$(database)/documents/products/$(item.productId))
+          .data.name == item.productName
+        && get(/databases/$(database)/documents/products/$(item.productId))
+          .data.price == item.unitPrice;
+    }
+
+    function validItemAt(items, index) {
+      return items.size() <= index || validProductItem(items[index]);
+    }
+
+    function subtotalFor(items) {
+      return items[0].lineTotal
+        + (items.size() > 1 ? items[1].lineTotal : 0)
+        + (items.size() > 2 ? items[2].lineTotal : 0);
+    }
+
+    function validOrderItems(items) {
+      return items is list
+        && items.size() > 0
+        && items.size() <= 3
+        && validItemAt(items, 0)
+        && validItemAt(items, 1)
+        && validItemAt(items, 2);
+    }
+
+    function validOrderDelivery(data) {
+      return (data.deliveryType == 'delivery'
+          && data.deliveryAddress is string
+          && data.deliveryAddress.size() > 0
+          && data.preferredDate is string
+          && data.preferredDate.size() > 0
+          && data.preferredTime is string
+          && data.preferredTime.size() > 0
+          && data.deliveryFee == deliveryFee()
+          && data.paymentMethod == 'Cash on Delivery'
+          && (!('deliveryLocation' in data)
+            || (data.deliveryLocation is latlng
+              && data.deliveryLocation.latitude() >= -90
+              && data.deliveryLocation.latitude() <= 90
+              && data.deliveryLocation.longitude() >= -180
+              && data.deliveryLocation.longitude() <= 180)))
+        || (data.deliveryType == 'pickup'
+          && data.deliveryAddress == null
+          && data.preferredDate == null
+          && data.preferredTime == null
+          && data.deliveryFee == 0
+          && data.paymentMethod == 'Cash on Pickup'
+          && !('deliveryLocation' in data));
+    }
+
+    function validOrderCreate(orderId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'orderNumber', 'customerId', 'items', 'deliveryType',
+          'deliveryAddress', 'preferredDate', 'preferredTime', 'subtotal',
+          'deliveryLocation', 'deliveryFee', 'totalAmount', 'paymentMethod', 'paymentStatus',
+          'orderStatus', 'createdAt'
+        ])
+        && data.keys().hasAll([
+          'orderNumber', 'customerId', 'items', 'deliveryType',
+          'deliveryAddress', 'preferredDate', 'preferredTime', 'subtotal',
+          'deliveryFee', 'totalAmount', 'paymentMethod', 'paymentStatus',
+          'orderStatus', 'createdAt'
+        ])
+        && data.orderNumber == orderId
+        && data.customerId == request.auth.uid
+        && validOrderItems(data.items)
+        && data.subtotal is number
+        && data.deliveryFee is number
+        && data.totalAmount is number
+        && data.subtotal == subtotalFor(data.items)
+        && data.totalAmount == data.subtotal + data.deliveryFee
+        && validOrderDelivery(data)
+        && data.orderStatus == 'Pending'
+        && data.paymentStatus == 'Unpaid'
+        && data.createdAt == request.time;
+    }
+
+    function validProduct(data) {
+      return data.keys().hasOnly([
+          'name', 'description', 'price', 'category', 'available', 'imageUrl',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'name', 'description', 'price', 'category', 'available', 'createdAt',
+          'updatedAt'
+        ])
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 120
+        && data.description is string
+        && data.description.size() <= 2000
+        && data.price is number
+        && data.price > 0
+        && data.category in ['purified', 'mineral']
+        && data.available is bool
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time
+        && (!('imageUrl' in data)
+          || data.imageUrl == null
+          || (data.imageUrl is string
+            && data.imageUrl.size() <= 2048
+          && data.imageUrl.matches(
+            '^https?://[A-Za-z0-9.-]+(:[0-9]+)?([/?#][^ ]*)?$'
+          )));
+    }
+
+    function validProductCreate() {
+      return validProduct(request.resource.data)
+        && request.resource.data.createdAt == request.time;
+    }
+
+    function validProductUpdate() {
+      return validProduct(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            'name', 'description', 'price', 'imageUrl', 'available', 'updatedAt'
+          ])
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function statusKey(status) {
+      return status == 'Pending' ? 'pending'
+        : status == 'Confirmed' ? 'confirmed'
+        : status == 'Preparing' ? 'preparing'
+        : status == 'Out for Delivery' ? 'out_for_delivery'
+        : status == 'Delivered' ? 'delivered'
+        : status == 'Cancelled' ? 'cancelled'
+        : 'unknown';
+    }
+
+    function statusActionId(orderId, status) {
+      return 'status-' + orderId + '-' + statusKey(status);
+    }
+
+    function canTransition(current, next, deliveryType) {
+      return (current == 'Pending'
+          && next in ['Confirmed', 'Cancelled'])
+        || (current == 'Confirmed'
+          && next in ['Preparing', 'Cancelled'])
+        || (current == 'Preparing'
+          && ((deliveryType == 'delivery' && next == 'Out for Delivery')
+            || (deliveryType == 'pickup' && next == 'Delivered')
+            || next == 'Cancelled'))
+        || (current == 'Out for Delivery'
+          && deliveryType == 'delivery'
+          && next in ['Delivered', 'Cancelled']);
+    }
+
+    function validStatusChangeRecords(orderId) {
+      let nextStatus = request.resource.data.orderStatus;
+      let historyPath = /databases/$(database)/documents/orders/$(orderId)/statusHistory/$(statusKey(nextStatus));
+      let actionPath = /databases/$(database)/documents/adminActions/$(statusActionId(orderId, nextStatus));
+      return existsAfter(historyPath)
+        && existsAfter(actionPath)
+        && getAfter(historyPath).data.status == nextStatus
+        && getAfter(historyPath).data.changedBy == request.auth.uid
+        && getAfter(historyPath).data.changedAt == request.time
+        && getAfter(actionPath).data.adminId == request.auth.uid
+        && getAfter(actionPath).data.action == 'order_status_changed'
+        && getAfter(actionPath).data.targetId == orderId
+        && getAfter(actionPath).data.status == nextStatus
+        && getAfter(actionPath).data.createdAt == request.time;
+    }
+
+    function validOrderStatusUpdate(orderId, changed) {
+      let currentStatus = resource.data.orderStatus;
+      let nextStatus = request.resource.data.orderStatus;
+      return canTransition(
+          currentStatus, nextStatus, resource.data.deliveryType
+        )
+        && request.resource.data.statusUpdatedAt == request.time
+        && changed.hasAll(['orderStatus', 'statusUpdatedAt'])
+        && (nextStatus == 'Confirmed'
+          ? changed.hasAll(['confirmedAt'])
+            && request.resource.data.confirmedAt == request.time
+          : !changed.hasAny(['confirmedAt']))
+        && changed.hasOnly(['orderStatus', 'statusUpdatedAt', 'confirmedAt'])
+        && validStatusChangeRecords(orderId);
+    }
+
+    function validOrderUpdate(orderId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return validOrderStatusUpdate(orderId, changed)
+        || (resource.data.paymentStatus == 'Unpaid'
+          && request.resource.data.paymentStatus == 'Paid'
+          && request.resource.data.paidAt == request.time
+          && changed.hasOnly(['paymentStatus', 'paidAt'])
+          && changed.hasAll(['paymentStatus', 'paidAt']));
+    }
+
+    function validAdminAction() {
+      return request.resource.data.keys().hasOnly([
+          'adminId', 'action', 'targetId', 'createdAt', 'status'
+        ])
+        && request.resource.data.keys().hasAll([
+          'adminId', 'action', 'targetId', 'createdAt'
+        ])
+        && request.resource.data.adminId == request.auth.uid
+        && request.resource.data.action in [
+          'payment_confirmed', 'order_status_changed',
+          'product_created', 'product_edited'
+        ]
+        && (request.resource.data.action == 'order_status_changed'
+          ? request.resource.data.keys().hasAll(['status'])
+            && request.resource.data.status in [
+              'Pending', 'Confirmed', 'Preparing',
+              'Out for Delivery', 'Delivered', 'Cancelled'
+            ]
+            && validStatusAction()
+          : !('status' in request.resource.data))
+        && request.resource.data.targetId is string
+        && request.resource.data.targetId.size() > 0
+        && request.resource.data.createdAt == request.time;
+    }
+
+    function validStatusHistoryCreate(orderId, entryId) {
+      let orderPath = /databases/$(database)/documents/orders/$(orderId);
+      let actionPath = /databases/$(database)/documents/adminActions/$(statusActionId(orderId, request.resource.data.status));
+      let beforeOrder = get(orderPath).data;
+      let afterOrder = getAfter(orderPath).data;
+      return request.resource.data.keys().hasOnly([
+          'status', 'changedAt', 'changedBy'
+        ])
+        && request.resource.data.keys().hasAll([
+          'status', 'changedAt', 'changedBy'
+        ])
+        && request.resource.data.status == afterOrder.orderStatus
+        && entryId == statusKey(request.resource.data.status)
+        && beforeOrder.orderStatus != request.resource.data.status
+        && canTransition(
+          beforeOrder.orderStatus,
+          request.resource.data.status,
+          beforeOrder.deliveryType
+        )
+        && afterOrder.statusUpdatedAt == request.time
+        && request.resource.data.changedBy == request.auth.uid
+        && request.resource.data.changedAt == request.time
+        && existsAfter(actionPath)
+        && getAfter(actionPath).data.adminId == request.auth.uid
+        && getAfter(actionPath).data.action == 'order_status_changed'
+        && getAfter(actionPath).data.targetId == orderId
+        && getAfter(actionPath).data.status == request.resource.data.status
+        && getAfter(actionPath).data.createdAt == request.time;
+    }
+
+    function validStatusAction() {
+      let orderId = request.resource.data.targetId;
+      let status = request.resource.data.status;
+      let historyPath = /databases/$(database)/documents/orders/$(orderId)/statusHistory/$(statusKey(status));
+      let orderPath = /databases/$(database)/documents/orders/$(orderId);
+      return existsAfter(historyPath)
+        && getAfter(historyPath).data.status == status
+        && getAfter(historyPath).data.changedBy == request.auth.uid
+        && getAfter(historyPath).data.changedAt == request.time
+        && getAfter(orderPath).data.orderStatus == status
+        && getAfter(orderPath).data.statusUpdatedAt == request.time;
+    }
+
+    match /users/{uid} {
+      allow get: if isOwner(uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(uid) && validCustomerProfile();
+      allow update: if isOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['fullName', 'phoneNumber', 'address'])
+        && request.resource.data.fullName is string
+        && request.resource.data.fullName.size() > 0
+        && request.resource.data.phoneNumber is string
+        && request.resource.data.phoneNumber.size() > 0
+        && request.resource.data.address is string
+        && request.resource.data.address.size() > 0;
+      allow delete: if false;
+    }
+
+    match /products/{productId} {
+      allow read: if signedIn();
+      allow create: if isAdmin() && validProductCreate();
+      allow update: if isAdmin() && validProductUpdate();
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn() && validOrderCreate(orderId);
+      allow update: if isAdmin() && validOrderUpdate(orderId);
+      allow delete: if false;
+
+      match /statusHistory/{entryId} {
+        allow get, list: if isAdmin()
+          || (signedIn()
+            && get(/databases/$(database)/documents/orders/$(orderId))
+              .data.customerId == request.auth.uid);
+        allow create: if isAdmin()
+          && validStatusHistoryCreate(orderId, entryId);
+        allow update, delete: if false;
+      }
+    }
+
+    match /adminActions/{actionId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() && validAdminAction();
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
